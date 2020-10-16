@@ -69,7 +69,7 @@ namespace ItemMicroservices
             }
             catch(Exception ex)
             {
-                var title = "Exception in QuoteShipment";
+                var title = "Exception in GetItemDataByMPN";
                 log.LogError(ex, title);
                 var teamsMessage = new TeamsMessage(title, $"Error message: {ex.Message}. Stacktrace: {ex.StackTrace}", "red", errorLogsUrl);
                 teamsMessage.LogToTeams(teamsMessage);
