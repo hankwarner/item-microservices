@@ -4,6 +4,7 @@ namespace ItemMicroservices.Models
     public class Item
     {
         public int MPN { get; set; }
+        public string ALT1Code { get; set; }
         public string ItemCategory { get; set; }
         public string ItemDescription { get; set; }
         public string Manufacturer { get; set; }
