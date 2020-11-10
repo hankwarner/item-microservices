@@ -39,7 +39,7 @@ namespace ItemMicroservices.Services
 
                     // TODO: update DB name once it is created
                     var query = @"
-                    SELECT MPN, ItemCategory, Manufacturer, BulkPack, BulkPackQuantity, PreferredShippingMethod, Weight, SourcingGuideline, Vendor, ItemDescription, OverpackRequired, 
+                    SELECT MPN, ItemCategory, Manufacturer, BulkPack, BulkPackQuantity, PreferredShippingMethod, Weight, SourcingGuideline, Vendor, ItemDescription, OverpackRequired, ALT1Code, 
                         CASE WHEN [StockingStatus533] = 'Stocking' THEN 1 WHEN [StockingStatus533] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus533],
                         CASE WHEN [StockingStatus423] = 'Stocking' THEN 1 WHEN [StockingStatus423] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus423],
                         CASE WHEN [StockingStatus761] = 'Stocking' THEN 1 WHEN [StockingStatus761] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus761],
