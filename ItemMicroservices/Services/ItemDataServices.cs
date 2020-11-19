@@ -5,6 +5,7 @@ using System.Linq;
 using Dapper;
 using ItemMicroservices.Models;
 using Microsoft.Extensions.Logging;
+using Polly;
 
 namespace ItemMicroservices.Services
 {
@@ -12,6 +13,7 @@ namespace ItemMicroservices.Services
     {
         public ILogger _logger { get; set; }
         public string errorLogsUrl { get; set; }
+        public string connString = Environment.GetEnvironmentVariable("SQL_CONN");
 
         public ItemDataServices(ILogger log, string logUrl)
         {
@@ -27,48 +29,19 @@ namespace ItemMicroservices.Services
         /// </summary>
         /// <param name="MPNs">Master Product Numbers to be included in the query.</param>
         /// <returns>A dictionary where MPN is the key and value is the item data from the table.</returns>
-        public Dictionary<int, Item> RequestItemDataByMPN(List<int> MPNs)
+        public ItemAndStockingData RequestItemDataByMPN(List<string> MPNs)
         {
             try
             {
-                var connString = Environment.GetEnvironmentVariable("SQL_CONN");
+                var itemDict = GetItemData(MPNs);
 
-                using (var conn = new SqlConnection(connString))
+                var stockingDict = GetStockingStatuses(MPNs);
+
+                return new ItemAndStockingData()
                 {
-                    conn.Open();
-
-                    // TODO: update DB name once it is created
-                    var query = @"
-                    SELECT MPN, ItemCategory, Manufacturer, BulkPack, BulkPackQuantity, PreferredShippingMethod, Weight, SourcingGuideline, Vendor, ItemDescription, OverpackRequired, ALT1Code, 
-                        CASE WHEN [StockingStatus533] = 'Stocking' THEN 1 WHEN [StockingStatus533] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus533],
-                        CASE WHEN [StockingStatus423] = 'Stocking' THEN 1 WHEN [StockingStatus423] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus423],
-                        CASE WHEN [StockingStatus761] = 'Stocking' THEN 1 WHEN [StockingStatus761] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus761],
-                        CASE WHEN [StockingStatus2911] = 'Stocking' THEN 1 WHEN [StockingStatus2911] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus2911],
-                        CASE WHEN [StockingStatus2920] = 'Stocking' THEN 1 WHEN [StockingStatus2920] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus2920],
-                        CASE WHEN [StockingStatus474] = 'Stocking' THEN 1 WHEN [StockingStatus474] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus474],
-                        CASE WHEN [StockingStatus986] = 'Stocking' THEN 1 WHEN [StockingStatus986] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus986],
-                        CASE WHEN [StockingStatus321] = 'Stocking' THEN 1 WHEN [StockingStatus321] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus321],
-                        CASE WHEN [StockingStatus625] = 'Stocking' THEN 1 WHEN [StockingStatus625] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus625],
-                        CASE WHEN [StockingStatus688] = 'Stocking' THEN 1 WHEN [StockingStatus688] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus688],
-                        CASE WHEN [StockingStatus796] = 'Stocking' THEN 1 WHEN [StockingStatus796] = 'Non-Stocking' THEN 0 ELSE null END [StockingStatus796]
-                    FROM FergusonIntegration.ferguson.Items 
-                    WHERE MPN in @MPNs";
-
-                    var mpnsWithItemData = conn.Query<Item>(query, new { MPNs }, commandTimeout: 6)
-                        .ToDictionary(item => item.MPN, item => item);
-
-                    var missingMPNs = MPNs.Where(x => mpnsWithItemData.All(y => y.Key != x)).ToList();
-
-                    // If any MPNs were not returned in the query, it means they are invalid. Add them to the dict as null.
-                    if (missingMPNs.Any())
-                    {
-                        missingMPNs.ForEach(mpn => mpnsWithItemData.Add(mpn, null));
-                    }
-
-                    conn.Close();
-
-                    return mpnsWithItemData;
-                }
+                    itemDataDict = itemDict,
+                    stockingStatusDict = stockingDict
+                };
             }
             catch(SqlException ex)
             {
@@ -77,6 +50,125 @@ namespace ItemMicroservices.Services
                 var teamsMessage = new TeamsMessage(title, $"Error message: {ex.Message}. Stacktrace: {ex.StackTrace}", "red", errorLogsUrl);
                 teamsMessage.LogToTeams(teamsMessage);
                 throw;
+            }
+        }
+
+
+        /// <summary>
+        ///     Runs a SELECT query on the ItemData table for all MPNs.
+        /// </summary>
+        /// <param name="MPNs">Master Product Numbers to include in the query.</param>
+        /// <returns>Dictionary of MPN : ItemData</returns>
+        public Dictionary<string, Item> GetItemData(List<string> MPNs)
+        {
+            var retryPolicy = Policy.Handle<SqlException>().Retry(5, (ex, count) =>
+            {
+                var title = "Error in GetItemData";
+                _logger.LogWarning(ex, $"{title}. Retrying...");
+
+                if (count == 5)
+                {
+                    var teamsMessage = new TeamsMessage(title, $"Error: {ex.Message}. Stacktrace: {ex.StackTrace}", "red", errorLogsUrl);
+                    teamsMessage.LogToTeams(teamsMessage);
+                    _logger.LogError(ex, title);
+                }
+            });
+
+            return retryPolicy.Execute(() =>
+            {
+                using (var conn = new SqlConnection(connString))
+                {
+                    var query = @"
+                        SELECT MPN, ItemCategory, Manufacturer, BulkPack, BulkPackQuantity, PreferredShippingMethod, Weight, SourcingGuideline, Vendor, ItemDescription, Overpack, ALTCODE
+                        FROM feiazprdspsrcengdb1.Data.ItemData
+                        WHERE MPN in @MPNs";
+
+                    var itemDict = conn.Query<Item>(query, new { MPNs }, commandTimeout: 6)
+                        .ToDictionary(item => item.MPN, item => item);
+
+                    AddMissingMPNsToDict(itemDict, MPNs);
+
+                    return itemDict;
+                }
+            });
+        }
+
+
+        /// <summary>
+        ///     Gets the stocking status by branch number for each MPN and initializes a stocking status dictionary.
+        /// </summary>
+        /// <param name="MPNs">Master Product Numbers</param>
+        /// <returns>Dictionary where MPN is the key and a dictionary of branch number/boolean is the value. If value is true for any branch, it is a stocking location.</returns>
+        public Dictionary<string, Dictionary<string, bool>> GetStockingStatuses(List<string> MPNs)
+        {
+            var retryPolicy = Policy.Handle<SqlException>().Retry(5, (ex, count) =>
+            {
+                var title = "Error in GetStockingStatuses";
+                _logger.LogWarning(ex, $"{title}. Retrying...");
+
+                if (count == 5)
+                {
+                    var teamsMessage = new TeamsMessage(title, $"Error: {ex.Message}. Stacktrace: {ex.StackTrace}", "red", errorLogsUrl);
+                    teamsMessage.LogToTeams(teamsMessage);
+                    _logger.LogError(ex, title);
+                }
+            });
+
+            return retryPolicy.Execute(() =>
+            {
+                using (var conn = new SqlConnection(connString))
+                {
+                    var query = @"
+                        SELECT MPN, BranchNumber, StockingStatus
+                        FROM feiazprdspsrcengdb1.Data.StockingStatus 
+                        WHERE MPN in @MPNs";
+
+                    var results = conn.Query<Stocking>(query, new { MPNs }, commandTimeout: 6);
+
+                    var stockingDict = results
+                        .GroupBy(stocking => stocking.MPN)
+                        .ToDictionary(stockingGroup => stockingGroup.Key,
+                                      stockingGroup => stockingGroup.ToDictionary(stocking => stocking.BranchNumber, 
+                                                                                  stocking => stocking.StockingStatus == "Stocking"));
+
+                    AddMissingMPNsToDict(stockingDict, MPNs);
+
+                    return stockingDict;
+                }
+            });
+        }
+
+
+        /// <summary>
+        ///     Checks if any MPNs do not have entries in the dictionary. If one is missing, a dictionary entry will be added with MPN as the key and null as the value.
+        /// </summary>
+        /// <param name="dict">Dictionary to add missing keys to.</param>
+        /// <param name="MPNs">List of Master Product Numbers to add to dictionary if missing.</param>
+        public void AddMissingMPNsToDict(Dictionary<string, Item> dict, List<string> MPNs)
+        {
+            var missingMPNs = MPNs.Where(x => dict.All(y => y.Key != x.ToString())).ToList();
+
+            // If any MPNs were not returned in the query, it means they are invalid. Add them to the dict as null.
+            if (missingMPNs.Any())
+            {
+                missingMPNs.ForEach(mpn => dict.Add(mpn.ToString(), null));
+            }
+        }
+
+
+        /// <summary>
+        ///     Checks if any MPNs do not have entries in the dictionary. If one is missing, a dictionary entry will be added with MPN as the key and null as the value.
+        /// </summary>
+        /// <param name="dict">Dictionary to add missing keys to.</param>
+        /// <param name="MPNs">List of Master Product Numbers to add to dictionary if missing.</param>
+        public void AddMissingMPNsToDict(Dictionary<string, Dictionary<string, bool>> dict, List<string> MPNs)
+        {
+            var missingMPNs = MPNs.Where(x => dict.All(y => y.Key != x.ToString())).ToList();
+
+            // If any MPNs were not returned in the query, it means they are invalid. Add them to the dict as null.
+            if (missingMPNs.Any())
+            {
+                missingMPNs.ForEach(mpn => dict.Add(mpn.ToString(), null));
             }
         }
     }
