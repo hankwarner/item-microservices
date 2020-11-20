@@ -83,7 +83,7 @@ namespace ItemMicroservices.Services
                         FROM feiazprdspsrcengdb1.Data.ItemData
                         WHERE MPN in @MPNs";
 
-                    var itemDict = conn.Query<Item>(query, new { MPNs }, commandTimeout: 6)
+                    var itemDict = conn.Query<Item>(query, new { MPNs }, commandTimeout: 150)
                         .ToDictionary(item => item.MPN, item => item);
 
                     AddMissingMPNsToDict(itemDict, MPNs);
@@ -123,7 +123,7 @@ namespace ItemMicroservices.Services
                         FROM feiazprdspsrcengdb1.Data.StockingStatus 
                         WHERE MPN in @MPNs";
 
-                    var results = conn.Query<Stocking>(query, new { MPNs }, commandTimeout: 6);
+                    var results = conn.Query<Stocking>(query, new { MPNs }, commandTimeout: 150);
 
                     var stockingDict = results
                         .GroupBy(stocking => stocking.MPN)
