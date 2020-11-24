@@ -11,7 +11,6 @@ using System.Web;
 using AzureFunctions.Extensions.Swashbuckle.Attribute;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using System.Threading;
 
 namespace ItemMicroservices
 {
