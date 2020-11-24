@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
+using System.Threading.Tasks;
 using Dapper;
 using ItemMicroservices.Models;
 using Microsoft.Extensions.Logging;
@@ -29,18 +30,17 @@ namespace ItemMicroservices.Services
         /// </summary>
         /// <param name="MPNs">Master Product Numbers to be included in the query.</param>
         /// <returns>A dictionary where MPN is the key and value is the item data from the table.</returns>
-        public ItemAndStockingData RequestItemDataByMPN(List<string> MPNs)
+        public async Task<ItemAndStockingData> RequestItemDataByMPN(List<string> MPNs)
         {
             try
             {
-                var itemDict = GetItemData(MPNs);
-
-                var stockingDict = GetStockingStatuses(MPNs);
+                var itemDataTask = GetItemData(MPNs);
+                var stockingDataTask = GetStockingStatuses(MPNs);
 
                 return new ItemAndStockingData()
                 {
-                    itemDataDict = itemDict,
-                    stockingStatusDict = stockingDict
+                    itemDataDict = await itemDataTask,
+                    stockingStatusDict = await stockingDataTask
                 };
             }
             catch(SqlException ex)
@@ -59,7 +59,7 @@ namespace ItemMicroservices.Services
         /// </summary>
         /// <param name="MPNs">Master Product Numbers to include in the query.</param>
         /// <returns>Dictionary of MPN : ItemData</returns>
-        public Dictionary<string, Item> GetItemData(List<string> MPNs)
+        public async Task<Dictionary<string, Item>> GetItemData(List<string> MPNs)
         {
             var retryPolicy = Policy.Handle<SqlException>().Retry(5, (ex, count) =>
             {
@@ -74,23 +74,25 @@ namespace ItemMicroservices.Services
                 }
             });
 
-            return retryPolicy.Execute(() =>
-            {
-                using (var conn = new SqlConnection(connString))
-                {
-                    var query = @"
+            return await retryPolicy.Execute(async () =>
+             {
+                 using (var conn = new SqlConnection(connString))
+                 {
+                     var query = @"
                         SELECT MPN, ItemCategory, Manufacturer, BulkPack, BulkPackQuantity, PreferredShippingMethod, Weight, SourcingGuideline, Vendor, ItemDescription, Overpack, ALTCODE
                         FROM feiazprdspsrcengdb1.Data.ItemData
                         WHERE MPN in @MPNs";
 
-                    var itemDict = conn.Query<Item>(query, new { MPNs }, commandTimeout: 150)
-                        .ToDictionary(item => item.MPN, item => item);
+                     var queryTask = conn.QueryAsync<Item>(query, new { MPNs }, commandTimeout: 150);
+                     var results = await queryTask;
 
-                    AddMissingMPNsToDict(itemDict, MPNs);
+                     var itemDict = results.ToDictionary(item => item.MPN, item => item);
 
-                    return itemDict;
-                }
-            });
+                     await AddMissingMPNsToDict(itemDict, MPNs);
+
+                     return itemDict;
+                 }
+             });
         }
 
 
@@ -99,7 +101,7 @@ namespace ItemMicroservices.Services
         /// </summary>
         /// <param name="MPNs">Master Product Numbers</param>
         /// <returns>Dictionary where MPN is the key and a dictionary of branch number/boolean is the value. If value is true for any branch, it is a stocking location.</returns>
-        public Dictionary<string, Dictionary<string, bool>> GetStockingStatuses(List<string> MPNs)
+        public async Task<Dictionary<string, Dictionary<string, bool>>> GetStockingStatuses(List<string> MPNs)
         {
             var retryPolicy = Policy.Handle<SqlException>().Retry(5, (ex, count) =>
             {
@@ -114,7 +116,7 @@ namespace ItemMicroservices.Services
                 }
             });
 
-            return retryPolicy.Execute(() =>
+            return await retryPolicy.Execute(async () =>
             {
                 using (var conn = new SqlConnection(connString))
                 {
@@ -123,7 +125,8 @@ namespace ItemMicroservices.Services
                         FROM feiazprdspsrcengdb1.Data.StockingStatus 
                         WHERE MPN in @MPNs";
 
-                    var results = conn.Query<Stocking>(query, new { MPNs }, commandTimeout: 150);
+                    var queryTask = conn.QueryAsync<Stocking>(query, new { MPNs }, commandTimeout: 150);
+                    var results = await queryTask;
 
                     var stockingDict = results
                         .GroupBy(stocking => stocking.MPN)
@@ -131,7 +134,7 @@ namespace ItemMicroservices.Services
                                       stockingGroup => stockingGroup.ToDictionary(stocking => stocking.BranchNumber, 
                                                                                   stocking => stocking.StockingStatus == "Stocking"));
 
-                    AddMissingMPNsToDict(stockingDict, MPNs);
+                    await AddMissingMPNsToDict(stockingDict, MPNs);
 
                     return stockingDict;
                 }
@@ -144,7 +147,7 @@ namespace ItemMicroservices.Services
         /// </summary>
         /// <param name="dict">Dictionary to add missing keys to.</param>
         /// <param name="MPNs">List of Master Product Numbers to add to dictionary if missing.</param>
-        public void AddMissingMPNsToDict(Dictionary<string, Item> dict, List<string> MPNs)
+        public async Task AddMissingMPNsToDict(Dictionary<string, Item> dict, List<string> MPNs)
         {
             var missingMPNs = MPNs.Where(x => dict.All(y => y.Key != x.ToString())).ToList();
 
@@ -161,7 +164,7 @@ namespace ItemMicroservices.Services
         /// </summary>
         /// <param name="dict">Dictionary to add missing keys to.</param>
         /// <param name="MPNs">List of Master Product Numbers to add to dictionary if missing.</param>
-        public void AddMissingMPNsToDict(Dictionary<string, Dictionary<string, bool>> dict, List<string> MPNs)
+        public async Task AddMissingMPNsToDict(Dictionary<string, Dictionary<string, bool>> dict, List<string> MPNs)
         {
             var missingMPNs = MPNs.Where(x => dict.All(y => y.Key != x.ToString())).ToList();
 
