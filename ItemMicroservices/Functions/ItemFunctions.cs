@@ -11,6 +11,7 @@ using System.Web;
 using AzureFunctions.Extensions.Swashbuckle.Attribute;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace ItemMicroservices
 {
@@ -34,8 +35,11 @@ namespace ItemMicroservices
         {
             try
             {
-                // Call item data service
-                var itemDataResponse = await GetItemDataByMPN(req, log);
+                // Call services asynchronously because they can run independantly of each other
+                var itemDataTask = GetItemDataByMPN(req, log);
+                var stockingDataTask = GetStockingStatusesByMPN(req, log);
+                
+                var itemDataResponse = await itemDataTask;
                 var itemDataResult = (ObjectResult)itemDataResponse.Result;
 
                 if (itemDataResult.StatusCode == 400)
@@ -46,8 +50,7 @@ namespace ItemMicroservices
                     return new BadRequestObjectResult(msg) { Value = msg };
                 }
 
-                // Call stocking status service
-                var stockingDataResponse = await GetStockingStatusesByMPN(req, log);
+                var stockingDataResponse = await stockingDataTask;
                 var stockingDataResult = (ObjectResult)stockingDataResponse.Result;
 
                 if (stockingDataResult.StatusCode == 400)
@@ -60,8 +63,8 @@ namespace ItemMicroservices
 
                 var response = new ItemAndStockingData()
                 {
-                    itemDataDict = (Dictionary<string, Item>)itemDataResult.Value,
-                    stockingStatusDict = (Dictionary<string, Dictionary<string, bool>>)stockingDataResult.Value
+                    itemDataDict = itemDataResult.Value as Dictionary<string, Item>,
+                    stockingStatusDict = stockingDataResult.Value as Dictionary<string, Dictionary<string, bool>>
                 };
 
                 return new OkObjectResult(response);
@@ -93,9 +96,10 @@ namespace ItemMicroservices
         {
             try
             {
+                log.LogInformation("GetItemDataByMPN start");
                 var query = HttpUtility.ParseQueryString(req.QueryString.ToString());
                 var mpnsArr = query.Get("mpn")?.Split(",");
-                log.LogInformation(@"MPNs:", mpnsArr);
+                log.LogInformation(@"MPNs: {mpnsArr}", mpnsArr);
 
                 if(mpnsArr == null)
                 {
@@ -105,8 +109,10 @@ namespace ItemMicroservices
                 }
 
                 var itemService = new ItemDataServices(log, errorLogsUrl);
-                var itemDict = itemService.GetItemData(mpnsArr.ToList());
+                var itemDataTask = itemService.GetItemData(mpnsArr.ToList());
+                var itemDict = await itemDataTask;
 
+                log.LogInformation("GetItemDataByMPN end");
                 return new OkObjectResult(itemDict);
             }
             catch(Exception ex)
@@ -136,9 +142,10 @@ namespace ItemMicroservices
         {
             try
             {
+                log.LogInformation("GetStockingStatusesByMPN start");
                 var query = HttpUtility.ParseQueryString(req.QueryString.ToString());
                 var mpnsArr = query.Get("mpn")?.Split(",");
-                log.LogInformation(@"MPNs:", mpnsArr);
+                log.LogInformation(@"MPNs: {mpnsArr}", mpnsArr);
 
                 if (mpnsArr == null)
                 {
@@ -148,8 +155,10 @@ namespace ItemMicroservices
                 }
 
                 var itemService = new ItemDataServices(log, errorLogsUrl);
-                var stockingDict = itemService.GetStockingStatuses(mpnsArr.ToList());
+                var stockingDataTask = itemService.GetStockingStatuses(mpnsArr.ToList());
+                var stockingDict = await stockingDataTask;
 
+                log.LogInformation("GetStockingStatusesByMPN end");
                 return new OkObjectResult(stockingDict);
             }
             catch (Exception ex)
